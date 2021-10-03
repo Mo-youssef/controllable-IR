@@ -1,0 +1,64 @@
+program: main_ppo.py
+method: grid
+name: Clusters_PPO
+project: Thesis_PPO_clusters2
+entity: youssef101
+metric:
+  name: average_R
+  goal: maximize
+parameters:
+  ir_beta:
+    values: [0.001, 0.01]
+command:
+  - ${env}
+  - /home/mohameys/miniconda3/envs/neural/bin/python
+  - ${program}
+  - ${args}
+  - >-
+    --env_name=GDY-Clusters-Semi-Sparse-v0
+    --env_alias=cluster_vanilla 
+    --max_frames=10800 
+    --max_steps=8e6
+    --grad_norm=0.5
+    --lr=0.0005
+    --batch_size=512
+    --warmup=10000 
+    --discount=0.99
+    --update_interval=2048
+    --num_envs=16 
+    --epochs=10 
+    --outdir=ppo_results 
+    --eval_n_runs=2 
+    --eval_num_envs=2
+    --log_freq=1000 
+    --checkpoint_frequency=1e8 
+    --eval_interval=50000 
+    --log_interval=10000 
+    --seed=42 
+    --wandb 
+    --wandb_project=Thesis_semi_clusters_tune  
+    --ir_warmup=10000 
+    --ngu_embed_size=32 
+    --ngu_lr=5e-4 
+    --ngu_update_schedule='{150:1, 10000:1, 100000:4, 1000000:8}' 
+    --ir_model_copy=10000 
+    --ngu_k_neighbors=10 
+    --ngu_L=5 
+    --ngu_mem=1e5 
+    --ctrl_hidden_size=32 
+    --ctrl_channels=64 
+    --ctrl_latent_size=128 
+    --ctrl_weight_normal=0.01 
+    --evaluate
+    --no_frame_stack
+    --ngu_reward
+    --recurrent
+
+  # --update_interval=2048 
+  # --ngu_reward \
+  # --ctrl_reward \
+  # --clip_rewards \ 
+  # --successful_score=1 \
+  # --no_frame_stack
+  # --video_every=4 \
+  # --lr=0.001 
