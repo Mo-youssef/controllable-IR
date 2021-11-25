@@ -68,11 +68,10 @@ experiment = (f"{ppo_params.env_alias}_seed-{ppo_params.seed}"
 
 if ppo_params.wandb:
     wandb.init(
-            project=ppo_params.wandb_project,
-            entity='youssef101',
-            name=experiment,
-            config=ppo_params,
-            )
+        project=ppo_params.wandb_project,
+        entity='ut-rl-control',
+        config=ppo_params,
+    )
     ppo_params = wandb.config
     unique_id = wandb.run.id
 
@@ -88,7 +87,7 @@ assert process_seeds.max() < 2 ** 32
 def make_env(idx, test, frame_stack=True, punishment=1):
     process_seed = int(process_seeds[idx])
     env_seed = 2 ** 32 - 1 - process_seed if test else process_seed
-    env = wrap_env(ppo_params.env_name, max_frames=ppo_params.eval_max_frames if test else ppo_params.max_frames, 
+    env = wrap_env(ppo_params.env_name, max_frames=ppo_params.eval_max_frames if test else ppo_params.max_frames,
                     clip_rewards=ppo_params.clip_rewards, frame_stack=frame_stack, obs_shape=(84,84), test=test,
                     punishment=punishment, no_ext=ppo_params.no_ext_reward)
     env.seed(env_seed)
@@ -116,7 +115,7 @@ del sample_env
 print("Loading model ................")
 model = PPO_model(obs_n_channels, n_actions, recurrent=ppo_params.recurrent)
 print("done")
-  
+
 optimizer = torch.optim.Adam(model.parameters(), lr=ppo_params.lr, eps=1e-8) # eps=1.5*10**-4)
 
 agent = agents.PPO(
@@ -141,7 +140,7 @@ print(f'Num of GPUs available = {torch.cuda.device_count()}')
 env = make_batch_env(test=False)
 num_envs = env.num_envs
 if ppo_params.evaluate:
-    eval_env = make_batch_env(test=True) if ppo_params.eval_num_envs > 1 else make_env(idx=0, test=True, frame_stack=False, punishment=ppo_params.punishment_scale) 
+    eval_env = make_batch_env(test=True) if ppo_params.eval_num_envs > 1 else make_env(idx=0, test=True, frame_stack=False, punishment=ppo_params.punishment_scale)
 else:
     eval_env = None
 
@@ -167,13 +166,13 @@ elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
         'encoder_out': ppo_params.ctrl_encoder_out,
     }
     if ppo_params.ctrl_reward:
-        episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
-                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
+        episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent,
+                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
                                 ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
                                 ppo_params.batch_size, ppo_params.ir_model_copy)
     else:
-        episodic_ir_module = ALL_CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
-                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
+        episodic_ir_module = ALL_CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent,
+                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
                                 ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
                                 ppo_params.batch_size, ppo_params.ir_model_copy)
 
@@ -224,12 +223,12 @@ try:
         # a_t
         actions = agent.batch_act(obss)
         # o_{t+1}, r_{t+1}
-        
+
 
         old_obs = new_obs
         obss, rs, dones, infos = env.step(actions)  # obss is list of lazyframes , rs & dones are tuples, actions is np.array, infos is a tuple of dicts
         reward = np.array(rs, dtype=float)
-        
+
 
         # pdb.set_trace()
         episode_r += rs
@@ -257,10 +256,10 @@ try:
             episode_ir[end] = 0
 
             if (t > ppo_params.ir_warmup):
-                episodic_memory_stats = episodic_ir_module.train(steps)         
+                episodic_memory_stats = episodic_ir_module.train(steps)
 
             if ppo_params.IR_module == 'NGU':
-                reward_int = episodic_ir_module.compute_reward(obss) 
+                reward_int = episodic_ir_module.compute_reward(obss)
             elif (ppo_params.IR_module == 'CTRL') or (ppo_params.IR_module == 'ALLCTRL'):
                 reward_int = episodic_ir_module.compute_reward(old_obs, actions)
             else:
@@ -316,7 +315,7 @@ try:
                 temp_dict = dict()
                 if 'Butterfl' in ppo_params.env_name:
                     temp_dict['butterfly_count'] = np.mean(recent_butterfly_counts)
-                
+
                 ir_logs = ngu_logs = ctrl_logs = dict()
                 if intrinsic_reward:
                     ir_logs = {'env_steps': t, 'last_IR': recent_ireturns[-1] if recent_ireturns else np.nan,
@@ -337,15 +336,15 @@ try:
                                 'CTRL_recon_loss': episodic_ir_module.accum_recon/episodic_ir_module.accum_counter,
                                 'CTRL_normal_loss': episodic_ir_module.accum_norm/episodic_ir_module.accum_counter,
                                 **masks}
-                            
+
                         episodic_ir_module.reset_stats()
                 wandb.log({'env_steps': t, 'agent_train_steps': agent.n_updates, 'last_R': recent_returns[-1] if recent_returns else np.nan,
-                        'episode':np.sum(episode_idx), 'average_R':np.mean(recent_returns) if recent_returns else np.nan, 
+                        'episode':np.sum(episode_idx), 'average_R':np.mean(recent_returns) if recent_returns else np.nan,
                         'episode_len': np.mean(episode_len_queue), 'max_R': np.max(recent_returns) if recent_returns else np.nan,
                         **temp_dict, **recorded_video,**ir_logs, **ngu_logs, **ctrl_logs})
                 recorded_video = dict()
 
-                        
+
         if evaluator and t >= ppo_params.warmup:
             eval_stats = evaluator.evaluate_if_necessary(step=t)
             if eval_stats is not None:

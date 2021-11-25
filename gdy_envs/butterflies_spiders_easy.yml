@@ -384,7 +384,7 @@ Actions:
       - Src:
           Object: catcher
           Commands:
-            - mov: _dest
+            # - mov: _dest
             - decr: butterfly_count
             - incr: butterfly_caught
             - reward: 1
