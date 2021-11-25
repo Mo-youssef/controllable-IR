@@ -1,3 +1,4 @@
+from gym.envs.registration import register
 import numpy as np
 import pfrl
 import os
@@ -10,6 +11,13 @@ from gym_minigrid.wrappers import ReseedWrapper, RGBImgObsWrapper, ImgObsWrapper
 from pfrl.wrappers import atari_wrappers
 import torch.nn as nn
 
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import PIL.Image as Image
+from skimage.transform import resize
+import wandb
+
 try:
     import cv2
 
@@ -18,34 +26,21 @@ try:
 except Exception:
     _is_cv2_available = False
 
-if 'GDY-Clusters-Sparse-v0' not in [env.id for env in gym.envs.registry.all()]:
-    griddly.GymWrapperFactory().build_gym_from_yaml(
-        'Clusters-Sparse',
-        os.path.join(os.getcwd(), 'sparse_clusters.yml'),
-        level=0,
-        player_observer_type=griddly.gd.ObserverType.SPRITE_2D,
-    )
-if 'GDY-Clusters-Semi-Sparse-v0' not in [env.id for env in gym.envs.registry.all()]:
-    griddly.GymWrapperFactory().build_gym_from_yaml(
-        'Clusters-Semi-Sparse',
-        os.path.join(os.getcwd(), 'semi_sparse_clusters.yml'),
-        level=0,
-        player_observer_type=griddly.gd.ObserverType.SPRITE_2D,
-    )
-if 'GDY-Clusters-Semi-Sparse-Wall-v0' not in [env.id for env in gym.envs.registry.all()]:
-    griddly.GymWrapperFactory().build_gym_from_yaml(
-        'Clusters-Semi-Sparse-Wall',
-        os.path.join(os.getcwd(), 'semi_sparse_clusters_wall.yml'),
-        level=0,
-        player_observer_type=griddly.gd.ObserverType.SPRITE_2D,
-    )
-if 'GDY-Clusters-Semi-Sparse-Wall-No-v0' not in [env.id for env in gym.envs.registry.all()]:
-    griddly.GymWrapperFactory().build_gym_from_yaml(
-        'Clusters-Semi-Sparse-Wall-No',
-        os.path.join(os.getcwd(), 'semi_sparse_clusters_wall_no.yml'),
-        level=0,
-        player_observer_type=griddly.gd.ObserverType.SPRITE_2D,
-    )
+def register_env(env_id: str, file_path: str):
+    if 'GDY-'+env_id+'-v0' not in [env.id for env in gym.envs.registry.all()]:
+        griddly.GymWrapperFactory().build_gym_from_yaml(
+            env_id,
+            os.path.join(os.getcwd(), file_path),
+            level=0,
+            player_observer_type=griddly.gd.ObserverType.SPRITE_2D,
+        )
+
+register_env(env_id='Clusters-Sparse', file_path='gdy_envs/sparse_clusters.yml')
+register_env(env_id='Clusters-Semi-Sparse', file_path='gdy_envs/semi_sparse_clusters.yml')
+register_env(env_id='Clusters-Semi-Sparse-Wall', file_path='gdy_envs/semi_sparse_clusters_wall.yml')
+register_env(env_id='Clusters-Semi-Sparse-Wall-No', file_path='gdy_envs/semi_sparse_clusters_wall_no.yml')
+register_env(env_id='Butterflies-Spiders', file_path='gdy_envs/butterflies_spiders.yml')
+register_env(env_id='Butterflies-Spiders-Easy', file_path='gdy_envs/butterflies_spiders_easy.yml')
 
 class RandomSelectionEpsilonGreedy(explorer.Explorer):
 
@@ -178,6 +173,51 @@ class RewardScaling(gym.Wrapper):
             reward *= self.scale
         return obs, reward, done, info
     
+class DelayCash(gym.Wrapper):
+    def __init__(self, env, cash_after):
+        """Take action on reset for envs that are fixed until firing."""
+        gym.Wrapper.__init__(self, env)
+        self.cash_after = cash_after
+        self.reward_sum = 0
+        
+    def step(self, ac):
+        obs, reward, done, info = self.env.step(ac)
+        if reward > 0:
+            if self.reward_sum >= self.cash_after:
+                reward = self.reward_sum
+                self.reward_sum = 0
+            else:
+                self.reward_sum += reward
+                reward = 0
+        return obs, reward, done, info
+
+class NoExtReward(gym.Wrapper):
+    def __init__(self, env):
+        """Take action on reset for envs that are fixed until firing."""
+        gym.Wrapper.__init__(self, env)
+        self.last_reward = 0
+        
+    def step(self, ac):
+        obs, reward, done, info = self.env.step(ac)
+        self.last_reward = reward
+        return obs, 0, done, info
+
+class CountFlies(gym.Wrapper):
+    def __init__(self, env):
+        """Take action on reset for envs that are fixed until firing."""
+        gym.Wrapper.__init__(self, env)
+        # print('count_flies')
+        self.butterfly_count = 0
+    
+    def get_butterfly_count(self):
+        # print('cget_ount_flies')
+        return self.butterfly_count
+        
+    def step(self, ac):
+        obs, reward, done, info = self.env.step(ac)
+        self.butterfly_count = self.env.get_state()['GlobalVariables']['butterfly_caught'][0]
+        return obs, reward, done, info
+    
 class ReturnState(gym.Wrapper):
     def __init__(self, env):
         gym.Wrapper.__init__(self, env)
@@ -186,29 +226,36 @@ class ReturnState(gym.Wrapper):
         obs, reward, done, info = self.env.step(ac)
         return obs, reward, done, (info, self.env.get_state())
 
-def griddly_wrapper(env_id, max_frames=0, clip_rewards=True, frame_stack=True, obs_shape=(84,84), test=False, punishment=1):
+def griddly_wrapper(env_id, max_frames=0, clip_rewards=True, frame_stack=True, obs_shape=(84,84), test=False, punishment=1, cash_after=-1, no_ext=False):
     env = gym.make(env_id)
     env.enable_history(True)
     env.reset()
     env = ChannelOrder(env, channel_order='hwc')
     env = ResizeFrame(env, (84,84))
     env = ChannelOrder(env, channel_order='chw')
-    env = RewardScaling(env, scale=punishment, event="box-move-near_wall")
+    if punishment != 1:
+        env = RewardScaling(env, scale=punishment, event="box-move-near_wall")
+    if cash_after != 1:
+        env = DelayCash(env, cash_after=cash_after)
     if max_frames:
         env = pfrl.wrappers.ContinuingTimeLimit(
             env, max_episode_steps=max_frames)
+    if no_ext:
+        env = NoExtReward(env)
+    if 'Butterfl' in env.unwrapped.spec.id:
+        env = CountFlies(env)
     # env = atari_wrappers.wrap_deepmind(env, episode_life=False, clip_rewards=clip_rewards, frame_stack=frame_stack)
     if test:
         env = ReturnState(env)
     return env
 
-def wrap_env(env_id, max_frames=5000, clip_rewards=True, episode_life=True, frame_stack=True, obs_shape=(84,84), test=False, punishment=1):
+def wrap_env(env_id, max_frames=5000, clip_rewards=True, episode_life=True, frame_stack=True, obs_shape=(84,84), test=False, punishment=1, cash_after=-1, no_ext=False):
     if env_id.startswith('MiniGrid'):
         env = mini_grid_wrapper(
             env_id, max_frames=max_frames, clip_rewards=clip_rewards, frame_stack=frame_stack)
     elif env_id.startswith('GDY'):
         env = griddly_wrapper(
-            env_id, max_frames=max_frames, clip_rewards=clip_rewards, frame_stack=frame_stack, obs_shape=obs_shape, test=test, punishment=punishment)
+            env_id, max_frames=max_frames, clip_rewards=clip_rewards, frame_stack=frame_stack, obs_shape=obs_shape, test=test, punishment=punishment, cash_after=cash_after,no_ext=no_ext)
     else:
         env = atari_wrappers.wrap_deepmind(atari_wrappers.make_atari(
             env_id, max_frames=max_frames), episode_life=True, clip_rewards=clip_rewards, frame_stack=frame_stack)
@@ -256,3 +303,76 @@ def lecun_init(layer, gain=1):
         nn.init.zeros_(layer.bias_ih_l0)
         nn.init.zeros_(layer.bias_hh_l0)
     return layer
+
+def vec_butterfly_count(vec_env):
+    vec_env._assert_not_closed()
+    for remote in vec_env.remotes:
+        remote.send(("get_butterfly_count", None))
+    results = [remote.recv() for remote in vec_env.remotes]
+    return np.array(results)
+
+class VideoRecorder():
+    def __init__(self, frequency):
+        self.video_frequency = frequency
+        self.record_video = True
+        self.last_video = 0
+        self.first_frame = True
+        self.frames = list()
+        self.history_intrinsic_reward = list()
+
+    def record_if_ready(self, step):
+        if step - self.last_video >= self.video_frequency:
+            self.record_video = True
+            self.last_video = step
+
+    def add_frames(self, observation, intrinsic_reward=None):
+        if self.record_video == False:
+            return
+        if self.first_frame:
+            info_frame = self._to_info_frame(None, None, None)
+            self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
+            self.first_frame = False
+        else:
+            self.history_intrinsic_reward.append(intrinsic_reward)
+            info_frame = self._to_info_frame(intrinsic_rewards=self.history_intrinsic_reward)
+            self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
+
+    def stop_and_reset(self, step):
+        if self.record_video == False:
+            self.record_if_ready(step)
+            return dict()
+        videos = wandb.Video(np.stack(self.frames).astype(np.uint8), fps=4, format="mp4")
+        # reseting the flags
+        self.record_video = False
+        self.first_frame = True
+        self.frames = list()
+        self.history_intrinsic_reward = list() 
+        print('recording video done')
+        return dict(video=videos)
+
+    def _to_info_frame(self, extrinsic_rewards=None, intrinsic_rewards=None, values=None):
+        fig = Figure(figsize=(3, 3), dpi=60)
+        canvas = FigureCanvas(fig)
+        ax = fig.gca()
+
+        if extrinsic_rewards is not None:
+            ax.plot(range(len(extrinsic_rewards)), extrinsic_rewards, color='green', label='extrinsic')
+        if intrinsic_rewards is not None:
+            ax.plot(range(len(intrinsic_rewards)), intrinsic_rewards, color='red', label='intrinsic')
+        if values is not None:
+            ax.plot(range(len(values)), values, color='blue', label='value')
+
+        ax.patch.set_alpha(0)
+        ax.legend()
+
+        canvas.draw()
+        w, h = canvas.get_width_height()
+        info_image = np.fromstring(canvas.tostring_rgb(), dtype=np.uint8)
+        info_image.shape = (w, h, 3)
+        info_image = Image.frombytes("RGB", (w, h), info_image.tostring())
+        plt.close(fig)
+        return np.asarray(info_image).transpose(2, 0, 1)
+
+    def _merge_info_and_obs(self, info_frame, obs_frame):
+        obs_frame_scaled = resize(obs_frame.transpose(1, 2, 0), info_frame.shape[1:], preserve_range=True).transpose(2, 0, 1)
+        return np.concatenate([obs_frame_scaled.astype(np.uint8), info_frame], axis=2)

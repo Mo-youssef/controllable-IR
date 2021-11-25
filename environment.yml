@@ -1,4 +1,4 @@
-name: neural
+name: neural2
 channels:
   - pytorch
   - defaults
@@ -261,4 +261,4 @@ dependencies:
     - yarl==1.5.1
     - yaspin==2.1.0
     - zipp==3.1.0
-prefix: /home/mohameys/miniconda3/envs/neural
+prefix: /home/mohameys/miniconda3/envs/neural2

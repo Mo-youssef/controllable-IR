@@ -25,6 +25,7 @@ from pfrl import utils
 from pfrl import experiments
 from pfrl.experiments.evaluator import save_agent
 from evaluator import Evaluator
+from multiprocess_vector_env import MultiprocessVectorEnv
 
 import gym_minigrid
 from gym_minigrid.wrappers import *
@@ -32,8 +33,8 @@ from gym_minigrid.window import Window
 
 from models.ppo_model import PPO_model
 from models.DQN_model import Embedding_fn, Embedding_full
-from utils import wrap_env
-from ppo_ir_modules import NGU_module, CTRL_module
+from utils import VideoRecorder, wrap_env, vec_butterfly_count
+from ppo_ir_modules import NGU_module, CTRL_module, ALL_CTRL_module
 
 import pdb
 # import ppo_params
@@ -45,6 +46,8 @@ if ppo_params.ngu_reward:
     ppo_params.IR_module = 'NGU'
 elif ppo_params.ctrl_reward:
     ppo_params.IR_module = 'CTRL'
+elif ppo_params.all_ctrl_reward:
+    ppo_params.IR_module = 'ALLCTRL'
 
 print(ppo_params)
 # pdb.set_trace()
@@ -60,7 +63,8 @@ if ppo_params.env_name.startswith('GDY'):
 #               f"{'_CTRL_ls' if ppo_params.ctrl_reward else ''}{ppo_params.ctrl_latent_size if ppo_params.ctrl_reward else ''}_s{ppo_params.seed}")
 experiment = (f"{ppo_params.env_alias}_seed-{ppo_params.seed}"
               f"{'_NGU' if ppo_params.ngu_reward else ''}"
-              f"{'_CTRL' if ppo_params.ctrl_reward else ''}")
+              f"{'_CTRL' if ppo_params.ctrl_reward else ''}"
+               f"{'_ALLCTRL' if ppo_params.all_ctrl_reward else ''}")
 
 if ppo_params.wandb:
     wandb.init(
@@ -85,11 +89,12 @@ def make_env(idx, test, frame_stack=True, punishment=1):
     process_seed = int(process_seeds[idx])
     env_seed = 2 ** 32 - 1 - process_seed if test else process_seed
     env = wrap_env(ppo_params.env_name, max_frames=ppo_params.eval_max_frames if test else ppo_params.max_frames, 
-                    clip_rewards=ppo_params.clip_rewards, frame_stack=frame_stack, obs_shape=(84,84), test=test, punishment=punishment)
+                    clip_rewards=ppo_params.clip_rewards, frame_stack=frame_stack, obs_shape=(84,84), test=test,
+                    punishment=punishment, no_ext=ppo_params.no_ext_reward)
     env.seed(env_seed)
     return env
 def make_batch_env(test):
-    vec_env = pfrl.envs.MultiprocessVectorEnv(
+    vec_env = MultiprocessVectorEnv(
         [
             (lambda: make_env(idx, test, frame_stack=False, punishment=ppo_params.punishment_scale))
             for idx, env in enumerate(range(ppo_params.num_envs))
@@ -100,6 +105,7 @@ def make_batch_env(test):
     return vec_env
 
 sample_env = make_batch_env(test=False)
+# pdb.set_trace()
 print("Observation space", sample_env.observation_space)
 print("Action space", sample_env.action_space)
 n_actions = sample_env.action_space.n
@@ -142,7 +148,7 @@ else:
 os.makedirs(ppo_params.outdir, exist_ok=True)
 logger = logging.getLogger(__name__)
 
-intrinsic_reward = ppo_params.ngu_reward or ppo_params.ctrl_reward
+intrinsic_reward = ppo_params.ngu_reward or ppo_params.ctrl_reward or ppo_params.all_ctrl_reward
 episodic_ir_module = None
 if ppo_params.ngu_reward:
     encoder = lambda: Embedding_fn(embedding_size=ppo_params.ngu_embed_size, input_channels=obs_n_channels)
@@ -151,7 +157,7 @@ if ppo_params.ngu_reward:
                                     ppo_params.ngu_k_neighbors, ppo_params.ngu_update_schedule, num_envs,
                                     ppo_params.ngu_mem, ppo_params.batch_size, ppo_params.ir_model_copy)
     episodic_ir_module.reset(np.ones(num_envs))
-elif ppo_params.ctrl_reward:
+elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
     model_args = {
         'input_channels': obs_n_channels,
         'num_actions': env.action_space.n,
@@ -160,10 +166,16 @@ elif ppo_params.ctrl_reward:
         'latent_size': ppo_params.ctrl_latent_size,
         'encoder_out': ppo_params.ctrl_encoder_out,
     }
-    episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
-                            ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
-                            ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
-                            ppo_params.batch_size, ppo_params.ir_model_copy)
+    if ppo_params.ctrl_reward:
+        episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
+                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
+                                ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
+                                ppo_params.batch_size, ppo_params.ir_model_copy)
+    else:
+        episodic_ir_module = ALL_CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
+                                ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
+                                ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
+                                ppo_params.batch_size, ppo_params.ir_model_copy)
 
     episodic_ir_module.reset(np.ones(num_envs))
 
@@ -180,6 +192,10 @@ evaluator = Evaluator(
 return_window_size = 100
 recent_returns = deque(maxlen=return_window_size)
 recent_ireturns = deque(maxlen=return_window_size)
+if 'Butterfl' in ppo_params.env_name:
+    recent_butterfly_counts = deque(maxlen=return_window_size)
+video_recorder = VideoRecorder(ppo_params.video_every)
+recorded_video = dict()
 
 episode_r = np.zeros(num_envs, dtype=np.float64)
 episode_ir = np.zeros(num_envs, dtype=np.float64)
@@ -187,8 +203,6 @@ episode_idx = np.zeros(num_envs, dtype="i")
 episode_len = np.zeros(num_envs, dtype="i")
 
 # o_0, r_0
-obss = env.reset()
-new_obs = [np.array(o) for o in obss]  # [np.array(o)[-1:] for o in obss] in case of frame_stack
 
 
 step_offset = ppo_params.warmup
@@ -200,15 +214,18 @@ if hasattr(agent, "t"):
 t = 0
 steps = 0
 episode_len_queue = deque(maxlen=100)
-# eval_stats_history = []  # List of evaluation episode stats dict
+obss = env.reset()
+new_obs = [np.array(o) for o in obss]  # [np.array(o)[-1:] for o in obss] in case of frame_stack
 print(model)
 print('TRAINING begins ....................')
+last_mask = 0
 try:
     while True:
         # a_t
         actions = agent.batch_act(obss)
         # o_{t+1}, r_{t+1}
         
+
         old_obs = new_obs
         obss, rs, dones, infos = env.step(actions)  # obss is list of lazyframes , rs & dones are tuples, actions is np.array, infos is a tuple of dicts
         reward = np.array(rs, dtype=float)
@@ -244,7 +261,7 @@ try:
 
             if ppo_params.IR_module == 'NGU':
                 reward_int = episodic_ir_module.compute_reward(obss) 
-            elif ppo_params.IR_module == 'CTRL':
+            elif (ppo_params.IR_module == 'CTRL') or (ppo_params.IR_module == 'ALLCTRL'):
                 reward_int = episodic_ir_module.compute_reward(old_obs, actions)
             else:
                 print(f'IR module:{ppo_params.IR_module} is not implemented yet')
@@ -252,6 +269,9 @@ try:
             reward += ppo_params.ir_beta*reward_int if (t > ppo_params.warmup) else 0
             episode_ir += reward_int
 
+            video_recorder.add_frames(obss[-1], reward_int[-1])
+        # if last episode ended, end the video recorder and add it wandb
+        recorded_video = video_recorder.stop_and_reset(step=t) if end[-1] else recorded_video
 
         # Agent observes the consequences
         agent.batch_observe(obss, reward, dones, resets)
@@ -267,12 +287,16 @@ try:
         # 3-5 are skipped when training is already finished.
         episode_idx += end
         recent_returns.extend(episode_r[end])
+        if 'Butterfl' in ppo_params.env_name:
+            butterfly_counts = vec_butterfly_count(env)
+            recent_butterfly_counts.extend(butterfly_counts[end])
 
         for _ in range(num_envs):
             t += 1
             if ppo_params.checkpoint_frequency and t % ppo_params.checkpoint_frequency == 0:
                 save_agent(agent, t, ppo_params.outdir+'/'+unique_id, logger, suffix='_agent')
-                torch.save(episodic_ir_module.test_embedding_fn, ppo_params.outdir+'/'+unique_id+f'/{t}_ir_model.pt')
+                if intrinsic_reward:
+                    torch.save(episodic_ir_module.test_embedding_fn, ppo_params.outdir+'/'+unique_id+f'/{t}_ir_model.pt')
                 # with open(unique_id+'_test_ir_save.pkl', 'wb') as f:
                 #     pickle.dump(episodic_ir_module.test_embedding_fn, f)
                 print('AGENT and IR saved .....')
@@ -289,26 +313,38 @@ try:
             print(log_str, flush=True)
             logger.info("statistics: {}".format(agent.get_statistics()))
             if ppo_params.wandb:
-                wandb.log({'env_steps': t, 'agent_train_steps': agent.n_updates, 'last_R': recent_returns[-1] if recent_returns else np.nan,
-                        'episode':np.sum(episode_idx), 'average_R':np.mean(recent_returns) if recent_returns else np.nan, 
-                        'episode_len': np.mean(episode_len_queue), 'max_R': np.max(recent_returns) if recent_returns else np.nan,})
-
+                temp_dict = dict()
+                if 'Butterfl' in ppo_params.env_name:
+                    temp_dict['butterfly_count'] = np.mean(recent_butterfly_counts)
+                
+                ir_logs = ngu_logs = ctrl_logs = dict()
                 if intrinsic_reward:
-                    wandb.log({'env_steps': t, 'last_IR': recent_ireturns[-1] if recent_ireturns else np.nan,
-                            'average_IR':np.mean(recent_ireturns) if recent_ireturns else np.nan})
+                    ir_logs = {'env_steps': t, 'last_IR': recent_ireturns[-1] if recent_ireturns else np.nan,
+                            'average_IR':np.mean(recent_ireturns) if recent_ireturns else np.nan}
                     if (episodic_ir_module.accum_counter > 0):
                         if ppo_params.ngu_reward:
-                            wandb.log({'env_steps': t, 'NGU_steps': episodic_ir_module.train_steps, 'NGU_loss': episodic_ir_module.accum_loss/episodic_ir_module.accum_counter,
+                            ngu_logs = {'NGU_steps': episodic_ir_module.train_steps, 'NGU_loss': episodic_ir_module.accum_loss/episodic_ir_module.accum_counter,
                                 'NGU_accuracy': episodic_ir_module.accum_acc/episodic_ir_module.accum_counter,
                                 # 'confusion_matrix': episodic_ir_module.confusion_matrix()})
-                            })
-                        elif ppo_params.ctrl_reward:
-                            wandb.log({'env_steps': t, 'CTRL_steps': episodic_ir_module.train_steps, 'CTRL_loss': episodic_ir_module.accum_loss/episodic_ir_module.accum_counter,
+                            }
+                        elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
+                            masks = dict()
+                            if (t - last_mask) > ppo_params.video_every:
+                                print('creating masks')
+                                last_mask = t
+                                masks = dict(ctrl_example_masks = episodic_ir_module.sample_imgs_butterflies(size=5))
+                            ctrl_logs = {'CTRL_steps': episodic_ir_module.train_steps, 'CTRL_loss': episodic_ir_module.accum_loss/episodic_ir_module.accum_counter,
                                 'CTRL_recon_loss': episodic_ir_module.accum_recon/episodic_ir_module.accum_counter,
                                 'CTRL_normal_loss': episodic_ir_module.accum_norm/episodic_ir_module.accum_counter,
-                                # 'ctrl_example_masks': episodic_ir_module.sample_imgs(size=5)})
-                            })
+                                **masks}
+                            
                         episodic_ir_module.reset_stats()
+                wandb.log({'env_steps': t, 'agent_train_steps': agent.n_updates, 'last_R': recent_returns[-1] if recent_returns else np.nan,
+                        'episode':np.sum(episode_idx), 'average_R':np.mean(recent_returns) if recent_returns else np.nan, 
+                        'episode_len': np.mean(episode_len_queue), 'max_R': np.max(recent_returns) if recent_returns else np.nan,
+                        **temp_dict, **recorded_video,**ir_logs, **ngu_logs, **ctrl_logs})
+                recorded_video = dict()
+
                         
         if evaluator and t >= ppo_params.warmup:
             eval_stats = evaluator.evaluate_if_necessary(step=t)
