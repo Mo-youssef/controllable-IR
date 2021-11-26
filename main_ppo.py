@@ -6,7 +6,6 @@ import sys
 import pickle
 import os
 from pfrl.agents import ppo
-import psutil
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import wandb
@@ -154,7 +153,7 @@ if ppo_params.ngu_reward:
     episodic_ir_module = NGU_module(encoder, Embedding_full, torch.optim.Adam, ppo_params.ngu_lr, agent,
                                     n_actions, ppo_params.max_frames, ppo_params.ngu_embed_size,
                                     ppo_params.ngu_k_neighbors, ppo_params.ngu_update_schedule, num_envs,
-                                    ppo_params.ngu_mem, ppo_params.batch_size, ppo_params.ir_model_copy)
+                                    ppo_params.ngu_mem, ppo_params.ir_batch_size, ppo_params.ir_model_copy)
     episodic_ir_module.reset(np.ones(num_envs))
 elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
     model_args = {
@@ -169,12 +168,12 @@ elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
         episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent,
                                 ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
                                 ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
-                                ppo_params.batch_size, ppo_params.ir_model_copy)
+                                ppo_params.ir_batch_size, ppo_params.ir_model_copy)
     else:
         episodic_ir_module = ALL_CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent,
                                 ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
                                 ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
-                                ppo_params.batch_size, ppo_params.ir_model_copy)
+                                ppo_params.ir_batch_size, ppo_params.ir_model_copy)
 
     episodic_ir_module.reset(np.ones(num_envs))
 
@@ -220,15 +219,14 @@ print('TRAINING begins ....................')
 last_mask = 0
 try:
     while True:
+        agent.training = t > ppo_params.warmup
         # a_t
         actions = agent.batch_act(obss)
         # o_{t+1}, r_{t+1}
 
-
         old_obs = new_obs
         obss, rs, dones, infos = env.step(actions)  # obss is list of lazyframes , rs & dones are tuples, actions is np.array, infos is a tuple of dicts
         reward = np.array(rs, dtype=float)
-
 
         # pdb.set_trace()
         episode_r += rs
@@ -255,7 +253,7 @@ try:
             recent_ireturns.extend(episode_ir[end])
             episode_ir[end] = 0
 
-            if (t > ppo_params.ir_warmup):
+            if t > ppo_params.ir_warmup:
                 episodic_memory_stats = episodic_ir_module.train(steps)
 
             if ppo_params.IR_module == 'NGU':
@@ -265,17 +263,15 @@ try:
             else:
                 print(f'IR module:{ppo_params.IR_module} is not implemented yet')
             # pdb.set_trace()
-            reward += ppo_params.ir_beta*reward_int if (t > ppo_params.warmup) else 0
+            reward += ppo_params.ir_beta * reward_int if (t > ppo_params.warmup) else 0
             episode_ir += reward_int
 
-            video_recorder.add_frames(obss[-1], reward_int[-1])
+            video_recorder.add_frames(obss[-1], reward_int[-1], infos[-1])
         # if last episode ended, end the video recorder and add it wandb
         recorded_video = video_recorder.stop_and_reset(step=t) if end[-1] else recorded_video
 
         # Agent observes the consequences
         agent.batch_observe(obss, reward, dones, resets)
-
-
 
         # For episodes that ends, do the following:
         #   1. increment the episode count
@@ -296,6 +292,12 @@ try:
                 save_agent(agent, t, ppo_params.outdir+'/'+unique_id, logger, suffix='_agent')
                 if intrinsic_reward:
                     torch.save(episodic_ir_module.test_embedding_fn, ppo_params.outdir+'/'+unique_id+f'/{t}_ir_model.pt')
+
+                if ppo_params.IR_module == 'NGU':
+                    torch.save(episodic_ir_module.embedding_model.state_dict(), os.path.join(wandb.run.dir, 'inverse_network.pth'))
+                elif (ppo_params.IR_module == 'CTRL') or (ppo_params.IR_module == 'ALLCTRL'):
+                    torch.save(episodic_ir_module.disentangle_network.state_dict(), os.path.join(wandb.run.dir, 'disentangle_network.pth'))
+
                 # with open(unique_id+'_test_ir_save.pkl', 'wb') as f:
                 #     pickle.dump(episodic_ir_module.test_embedding_fn, f)
                 print('AGENT and IR saved .....')
@@ -319,7 +321,7 @@ try:
                 ir_logs = ngu_logs = ctrl_logs = dict()
                 if intrinsic_reward:
                     ir_logs = {'env_steps': t, 'last_IR': recent_ireturns[-1] if recent_ireturns else np.nan,
-                            'average_IR':np.mean(recent_ireturns) if recent_ireturns else np.nan}
+                               'average_IR':np.mean(recent_ireturns) if recent_ireturns else np.nan}
                     if (episodic_ir_module.accum_counter > 0):
                         if ppo_params.ngu_reward:
                             ngu_logs = {'NGU_steps': episodic_ir_module.train_steps, 'NGU_loss': episodic_ir_module.accum_loss/episodic_ir_module.accum_counter,
@@ -344,8 +346,7 @@ try:
                         **temp_dict, **recorded_video,**ir_logs, **ngu_logs, **ctrl_logs})
                 recorded_video = dict()
 
-
-        if evaluator and t >= ppo_params.warmup:
+        if evaluator:
             eval_stats = evaluator.evaluate_if_necessary(step=t)
             if eval_stats is not None:
                 agent_stats = dict(agent.get_statistics())

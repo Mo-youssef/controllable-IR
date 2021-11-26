@@ -12,6 +12,7 @@ def create_parser():
     parser.add_argument('--grad_norm', type=float, default=0.5, help='maximum gradient norm')
     parser.add_argument('--lr', type=float, default=0.0005, help='Learning Rate')
     parser.add_argument('--batch_size', type=int_type, default=int_type(512), help='Batch Size')
+    parser.add_argument('--ir_batch_size', type=int_type, default=int_type(32), help='Batch Size')
     parser.add_argument('--warmup', type=int_type, default=int_type(10000), help='warmup steps before training')
     parser.add_argument('--discount', type=float, default=0.95, help='reward discount')
     parser.add_argument('--update_interval', type=int_type, default=int_type(2048), help='num of env steps per train step')

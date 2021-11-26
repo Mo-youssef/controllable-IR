@@ -22,7 +22,6 @@ from ppo_ir_modules import Eval_intrinsic_module
 import pickle
 import uuid
 
-import pdb
 
 class ProbingDataset():
     def __init__(self, max_size):
@@ -229,7 +228,7 @@ class Evaluator:
 
             frames = list()
             if self.record_video:
-                info_frame = self._to_info_frame(None, None, None)
+                info_frame = self._to_info_frame(None, None, None, None)
                 frames.append(self._merge_info_and_obs(info_frame, observations[-1].copy()))
 
             end = np.zeros(self.num_envs, dtype=bool)
@@ -246,8 +245,6 @@ class Evaluator:
                 old_observations = observations
                 with Timing(timing, 'time_evaluator_step'):
                     observations, rewards, dones, infos = self.env.step(actions)
-
-                catch_bf = int('History' in info and len([event for event in info['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0)
 
                 if self.intrinsic_model is not None:
                     with Timing(timing, 'IR_model_step'):
@@ -301,9 +298,10 @@ class Evaluator:
                     history_extrinsic_reward.append(rewards[-1])
                     history_intrinsic_reward.append(intrinsic_rewards[-1])
                     history_value.append(value)
-                    history_catch_bf.append(catch_bf)
+                    # catch_bf = int('History' in infos[-1] and len([event for event in infos[-1]['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0)
+                    # history_catch_bf.append(catch_bf)
 
-                    if ((not end[-1]) and self.record_video):
+                    if not end[-1] and self.record_video:
                         info_frame = self._to_info_frame(history_extrinsic_reward, history_intrinsic_reward, history_value, history_catch_bf)
                         frames.append(self._merge_info_and_obs(info_frame, observations[-1].copy()))
 

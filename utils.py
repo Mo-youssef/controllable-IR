@@ -319,38 +319,45 @@ class VideoRecorder():
         self.first_frame = True
         self.frames = list()
         self.history_intrinsic_reward = list()
+        self.history_catch_bf = list()
 
     def record_if_ready(self, step):
         if step - self.last_video >= self.video_frequency:
             self.record_video = True
             self.last_video = step
 
-    def add_frames(self, observation, intrinsic_reward=None):
-        if self.record_video == False:
+    def add_frames(self, observation, intrinsic_reward=None, info=None):
+        if self.record_video is False:
             return
+
         if self.first_frame:
             info_frame = self._to_info_frame(None, None, None)
             self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
             self.first_frame = False
         else:
             self.history_intrinsic_reward.append(intrinsic_reward)
-            info_frame = self._to_info_frame(intrinsic_rewards=self.history_intrinsic_reward)
+            catch_bf = int('History' in info and len([event for event in info['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0)
+            self.history_catch_bf.append(catch_bf)
+
+            info_frame = self._to_info_frame(intrinsic_rewards=self.history_intrinsic_reward, catch_bf=self.history_catch_bf)
             self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
 
     def stop_and_reset(self, step):
         if self.record_video == False:
             self.record_if_ready(step)
             return dict()
+
         videos = wandb.Video(np.stack(self.frames).astype(np.uint8), fps=4, format="mp4")
         # reseting the flags
         self.record_video = False
         self.first_frame = True
         self.frames = list()
-        self.history_intrinsic_reward = list() 
+        self.history_intrinsic_reward = list()
+        self.history_catch_bf = list()
         print('recording video done')
         return dict(video=videos)
 
-    def _to_info_frame(self, extrinsic_rewards=None, intrinsic_rewards=None, values=None):
+    def _to_info_frame(self, extrinsic_rewards=None, intrinsic_rewards=None, values=None, catch_bf=None):
         fig = Figure(figsize=(3, 3), dpi=60)
         canvas = FigureCanvas(fig)
         ax = fig.gca()
@@ -361,6 +368,8 @@ class VideoRecorder():
             ax.plot(range(len(intrinsic_rewards)), intrinsic_rewards, color='red', label='intrinsic')
         if values is not None:
             ax.plot(range(len(values)), values, color='blue', label='value')
+        if catch_bf is not None:
+            ax.plot(range(len(catch_bf)), catch_bf, color='yellow', label='catch_bf')
 
         ax.patch.set_alpha(0)
         ax.legend()

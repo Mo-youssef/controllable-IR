@@ -604,11 +604,11 @@ def combine_frames(main_frame, mask, action, event, norm_mask=None):
     ax1.axis('off')
     # pdb.set_trace()
     ax1.set_title(f'action: {action_name[action]}\nmax_norm: {np.max(np.abs(gray_mask)):.3f}')
-    ax2.imshow(gray_mask, cmap='gray')  #, vmin=0, vmax=1)
+    ax2.imshow(gray_mask, cmap='gray', vmin=-1, vmax=1)
     ax2.axis('off')
     ax2.set_title('events: {}'.format("\n".join(event)))
     if norm_mask is not None:
-        ax3.imshow(gray_norm_mask, cmap='gray') 
+        ax3.imshow(gray_norm_mask, cmap='gray', vmin=-1, vmax=1)
         ax3.axis('off')
         ax3.set_title(f'max_norm: {np.max(np.abs(gray_norm_mask)):.3f}')
     fig.canvas.draw()
