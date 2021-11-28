@@ -22,6 +22,7 @@ from ppo_ir_modules import Eval_intrinsic_module
 import pickle
 import uuid
 
+import pdb
 
 class ProbingDataset():
     def __init__(self, max_size):
@@ -96,7 +97,7 @@ class ProbingDataset():
         with open('tsne_data/'+unique_id+'.pkl', 'wb') as f:
             pickle.dump((tsne_embeddings, tsne_labels), f)
         tsne_mappings = TSNE(n_components=2).fit_transform(tsne_embeddings)
-        separation_score = calculate_separation(tsne_mappings, tsne_labels)
+        separation_score = calculate_separation(tsne_mappings, tsne_labels) 
         title = f'Separation Score: f1={separation_score[0]:.5f}, Acc={separation_score[1]:.5f}'
         wnb_tsne_plot = plot_scatter_plotly(tsne_mappings, tsne_labels, title)
 
@@ -111,7 +112,7 @@ class ProbingDataset():
     #     tsne_embeddings = np.concatenate([avatar_embeddings, box_embeddings], axis=0)
     #     tsne_labels = np.concatenate([avatar_labels, box_labels])
     #     tsne_mappings = TSNE(n_components=2).fit_transform(tsne_embeddings)
-    #     separation_score = calculate_separation(tsne_mappings, tsne_labels)
+    #     separation_score = calculate_separation(tsne_mappings, tsne_labels) 
     #     title = f'Separation Score: f1={separation_score[0]:.5f}, Acc={separation_score[1]:.5f}'
     #     wnb_tsne_plot = plot_scatter_plotly(tsne_mappings, tsne_labels, title)
     #     return dict(balanced_TSNE=wnb_tsne_plot)
@@ -169,7 +170,7 @@ class Evaluator:
             # eval_stats.update(tsne_plot)
 
             self.probing_dataset.reset()
-        return eval_stats
+        return eval_stats        
 
     def evaluate_if_necessary(self, step):
         if step - self.last_video >= self.video_frequency:
@@ -224,13 +225,12 @@ class Evaluator:
             history_extrinsic_reward = list()
             history_intrinsic_reward = list()
             history_value = list()
-            history_catch_bf = list()
 
             frames = list()
             if self.record_video:
-                info_frame = self._to_info_frame(None, None, None, None)
+                info_frame = self._to_info_frame(None, None, None)
                 frames.append(self._merge_info_and_obs(info_frame, observations[-1].copy()))
-
+            
             end = np.zeros(self.num_envs, dtype=bool)
 
             stats['extrinsic_reward'].append(0.)
@@ -248,7 +248,7 @@ class Evaluator:
 
                 if self.intrinsic_model is not None:
                     with Timing(timing, 'IR_model_step'):
-                        # self.intrinsic_model.reset(end)
+                        # self.intrinsic_model.reset(end)     
                         if self.intrinsic_model.name == 'NGU':
                             intrinsic_rewards, ir_embeddings = self.intrinsic_model.compute_reward(observations)
                         elif self.intrinsic_model.name == 'CTRL':
@@ -262,7 +262,7 @@ class Evaluator:
 #     if (('box' in item['SourceObjectName']) and ('wall' in item['DestinationObjectName'])):
 #         events.append('box-hit-wall')
 
-# return events or ['nothing']
+# return events or ['nothing']  
 
                 # tsne_label = []
                 for intrinsic_reward, info, obs, action in zip(intrinsic_rewards, infos, observations, actions):
@@ -277,7 +277,7 @@ class Evaluator:
                             # move_event = 1
                             if (self.probing_dataset is not None):
                                 avatar_loc = get_location(state, 'avatar', details)
-                                self.probing_dataset.add((obs, avatar_loc, action), 'a')  # Action is added for the CTRL module
+                                self.probing_dataset.add((obs, avatar_loc, action), 'a')  # Action is added for the CTRL module 
                                 self.probing_dataset.add((obs, avatar_loc, action), 'am')
                         elif (event == 'avatar-move-blue_box') or (event == 'avatar-move-red_box') or (event == 'avatar-move-green_box'):
                             # move_event = 2
@@ -298,18 +298,16 @@ class Evaluator:
                     history_extrinsic_reward.append(rewards[-1])
                     history_intrinsic_reward.append(intrinsic_rewards[-1])
                     history_value.append(value)
-                    # catch_bf = int('History' in infos[-1] and len([event for event in infos[-1]['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0)
-                    # history_catch_bf.append(catch_bf)
 
-                    if not end[-1] and self.record_video:
-                        info_frame = self._to_info_frame(history_extrinsic_reward, history_intrinsic_reward, history_value, history_catch_bf)
+                    if ((not end[-1]) and self.record_video):
+                        info_frame = self._to_info_frame(history_extrinsic_reward, history_intrinsic_reward, history_value)
                         frames.append(self._merge_info_and_obs(info_frame, observations[-1].copy()))
 
                 # Reset environments and IR module
                 end = np.logical_or.reduce((end, dones, [info[0].get("needs_reset", False) for info in infos])) # info[0] is done because eval env returns: obs, r, done, (info, state)
                 _ = self.env.reset(~end)
                 if self.intrinsic_model is not None:
-                    self.intrinsic_model.reset(end)
+                    self.intrinsic_model.reset(end)  
 
             if self.record_video:
                 with Timing(timing, 'making_video_step'):
@@ -333,7 +331,7 @@ class Evaluator:
         #         tsne_embeddings = np.concatenate(tsne_embeddings, axis=0)
         #         tsne_mappings = TSNE(n_components=2).fit_transform(tsne_embeddings)
         #         mean_distance = np.linalg.norm(np.mean(tsne_embeddings[tsne_labels==1]) - np.mean(tsne_embeddings[tsne_labels==2]))
-        #         separation_score = calculate_separation(tsne_mappings, tsne_labels)
+        #         separation_score = calculate_separation(tsne_mappings, tsne_labels) 
         #         title = f'Mean distance between events= {mean_distance:.8f}<br>Separation Score: f1={separation_score[0]:.5f}, Acc={separation_score[1]:.5f}'
         #         wnb_tsne_plot = plot_scatter_plotly(tsne_mappings, tsne_labels, title)
 
@@ -388,7 +386,7 @@ class Evaluator:
     #                 done = done or info.get("needs_reset", False)
 
     #             if self.intrinsic_model is not None:
-    #                 self.intrinsic_model.reset([done])
+    #                 self.intrinsic_model.reset([done])      
 
     #                 intrinsic_reward = self.intrinsic_model.compute_reward([observation])[0]
 
@@ -449,7 +447,7 @@ class Evaluator:
             return events or ['nothing'], events_details or ['nothing']
         return events or ['nothing']
 
-    def _to_info_frame(self, extrinsic_rewards, intrinsic_rewards, values, catch_bf):
+    def _to_info_frame(self, extrinsic_rewards, intrinsic_rewards, values):
         fig = Figure(figsize=(8, 8), dpi=30)
         canvas = FigureCanvas(fig)
         ax = fig.gca()
@@ -458,7 +456,6 @@ class Evaluator:
             ax.plot(range(len(extrinsic_rewards)), extrinsic_rewards, color='green', label='extrinsic')
             ax.plot(range(len(intrinsic_rewards)), intrinsic_rewards, color='red', label='intrinsic')
             ax.plot(range(len(values)), values, color='blue', label='value')
-            ax.plot(range(len(intrinsic_rewards)), catch_bf, color='yellow', label='catch_bf')
 
         ax.patch.set_alpha(0)
         ax.legend()
@@ -538,8 +535,8 @@ def plot_scatter(data, labels, classes=None):
                 # wnb_tsne_plot = wandb.Image(tsne_plot, caption=None)
     assert len(data.T) == 2, 'data should be of shape (N,2)'
     fig, ax = plt.subplots()    #(figsize=(8,8))
-    # scatter = ax.scatter(*data.T, c=labels, marker='.', alpha=0.4, edgecolors='None')
-    scatter = ax.scatter(*data.T, c=labels, marker='o', alpha=0.4, edgecolors='None', cmap='PiYG')
+    # scatter = ax.scatter(*data.T, c=labels, marker='.', alpha=0.4, edgecolors='None') 
+    scatter = ax.scatter(*data.T, c=labels, marker='o', alpha=0.4, edgecolors='None', cmap='PiYG') 
     classes = classes if classes else np.unique(labels)
     assert len(classes) == len(np.unique(labels)), 'Number of classes must equal unique labels'
     legend1 = ax.legend(scatter.legend_elements()[0], classes) #, framealpha=0.3)

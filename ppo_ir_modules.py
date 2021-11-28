@@ -21,22 +21,29 @@ import wandb
 
 import pdb
 
-class MainMemory():
+
+class MainMemory:
+
     def __init__(self, max_size, batch_size, device):
         self.data = deque(maxlen=max_size)
         self.max_size = max_size
         self.device = device
         self.batch_size = batch_size
+
     def uniform_sample(self):
+        if len(self.data) < self.batch_size:
+            return None
+
         indices = sample_n_k(len(self.data), self.batch_size)
         sampled = [self.data[i] for i in indices]
-        return sampled # list of tuples of form (old obs, new obs, action, info)
+        return sampled  # list of tuples of form (old obs, new obs, action, info)
+
     def add(self, data):
         for item in data:
             self.data.append(item) 
             
 class EpisodicMemory():
-    def __init__(self, max_size, embedding_size, k_neighbors, eps=0.01, C=0.001, psi=0.008):
+    def __init__(self, max_size, embedding_size, k_neighbors, eps=0.01, C=0.001, psi=0.008, max_sim=8):
         self.num = 0
         self.max_size = max_size
         self.memory = np.zeros((max_size, embedding_size))
@@ -46,7 +53,7 @@ class EpisodicMemory():
         self.eps = eps
         self.C = C
         self.psi = psi
-        self.max_sim = 8
+        self.max_sim = max_sim
         self.embedding_size = embedding_size
 
     def reset(self):
@@ -58,15 +65,17 @@ class EpisodicMemory():
         self.memory[self.num % self.max_size] = np.array(embedding).ravel()
         self.num = (self.num + 1) % self.max_size
 
-    def score(self, embedding):
+    def score(self, embedding, return_distance=False):
         if self.num < self.k_neighbors:
-            return 1 
+            if return_distance:
+                return 0, -1
+
+            return 0
+
         test = np.array(embedding).ravel()[None, :]
         dists = np.sum((test - self.memory[:self.num])**2, axis=1)
-        k_dist = np.partition(dists, self.k_neighbors+1)[:self.k_neighbors+1] if len(
-            dists) > self.k_neighbors+1 else np.sort(dists)[:self.k_neighbors+1]
-        k_dist = np.delete(k_dist, k_dist.argmin()) if len(
-            k_dist) > 1 else k_dist
+        k_dist = np.partition(dists, self.k_neighbors+1)[:self.k_neighbors+1] if len(dists) > self.k_neighbors+1 else np.sort(dists)[:self.k_neighbors+1]
+        k_dist = np.delete(k_dist, k_dist.argmin()) if len(k_dist) > 1 else k_dist
         self.running_sum += np.sum(k_dist)
         self.running_num += len(k_dist)
         running_mean = self.running_sum / self.running_num
@@ -74,7 +83,11 @@ class EpisodicMemory():
         dist_normalized = np.maximum(dist_normalized - self.psi, 0)
         dist_kernel = self.eps / (self.eps + dist_normalized)
         sim = np.sqrt(np.sum(dist_kernel)) + self.C
-        return 0 if sim >= self.max_sim else 1/sim
+        score = 0 if sim >= self.max_sim else 1 / sim
+        if return_distance:
+            return score, dist_normalized
+
+        return score
 
 class Eval_intrinsic_module():
     def __init__(self, encoder, agent, episodic_max_size,
@@ -155,7 +168,7 @@ class NGU_module():
     name = 'NGU'
     def __init__(self, embedding_fn, embedding_model, optimizer,
                  lr, agent, n_actions, episodic_max_size, embedding_size,
-                 k_neighbors, update_schedule, num_envs, mem_size, batch_size, ir_model_copy):
+                 k_neighbors, update_schedule, num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_max_sim):
         # this class takes the agent as argument to get parameters not for any calculations
         self.agent = agent
         self.embedding_fn = embedding_fn().to(self.agent.device)
@@ -165,7 +178,7 @@ class NGU_module():
             self.embedding_fn, n_actions).to(self.agent.device)
         self.optimizer = optimizer(
             self.embedding_model.parameters(), lr=lr)
-        self.episodic_memory = [EpisodicMemory(episodic_max_size, embedding_size, k_neighbors) for _ in range(num_envs)]
+        self.episodic_memory = [EpisodicMemory(episodic_max_size, embedding_size, k_neighbors, ir_eps, ir_c, max_sim=ir_max_sim) for _ in range(num_envs)]
         self.memory = MainMemory(mem_size, batch_size, agent.device)
         self.loss_fn = nn.CrossEntropyLoss()
         self.num_envs = num_envs
@@ -256,15 +269,16 @@ class NGU_module():
 
 class CTRL_module():
     name = 'CTRL'
-    def __init__(self, model_args, optimizer, lr, agent, weight_normal,
-                 episodic_max_size, k_neighbors, update_schedule,
-                 num_envs, mem_size, batch_size, ir_model_copy):
+
+    def __init__(self, model_args, optimizer, lr, agent, weight_normal, weight_effect, episodic_max_size, k_neighbors, update_schedule,
+                 num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_max_sim):
         self.agent = agent
         self.weight_normal = weight_normal
+        self.weight_effect = weight_effect
         self.disentangle_network = DisentangleNetwork(**model_args).to(self.agent.device)
         self.test_embedding_fn = copy.deepcopy(self.disentangle_network).to(self.agent.device)
         self.optimizer = optimizer(self.disentangle_network.parameters(), lr=lr)
-        self.episodic_memory = [EpisodicMemory(episodic_max_size, model_args['latent_size'], k_neighbors) for _ in range(num_envs)]
+        self.episodic_memory = [EpisodicMemory(episodic_max_size, model_args['latent_size'], k_neighbors, ir_eps, ir_c, max_sim=ir_max_sim) for _ in range(num_envs)]
         self.memory = MainMemory(mem_size, batch_size, agent.device)
         self.num_envs = num_envs
         self.train_steps = 0
@@ -310,7 +324,6 @@ class CTRL_module():
         self.accum_loss = 0
         self.accum_counter = 0
 
-
     def train(self, time_step):
         if time_step % self.model_copy == 0:
             self.test_embedding_fn.load_state_dict(self.disentangle_network.state_dict())
@@ -337,14 +350,20 @@ class CTRL_module():
         total_effect = next_observations - observations
 
         # pdb.set_trace()
+        mask_weight = (total_effect.sign().abs() * self.weight_effect + 1)
         controllable_effect, normal_effect, _, _ = self.disentangle_network(observations, actions)
-        normal_reconstruction_loss = self.weight_normal * F.mse_loss(normal_effect, total_effect)
-        total_reconstruction_loss = F.mse_loss(normal_effect + controllable_effect, total_effect)
+        normal_reconstruction_loss = (self.weight_normal * F.mse_loss(normal_effect, total_effect, reduction='none') * mask_weight).sum(dim=(1, 2, 3)).mean()
+        total_reconstruction_loss = (F.mse_loss(normal_effect + controllable_effect, total_effect, reduction='none') * mask_weight).sum(dim=(1, 2, 3)).mean()
+        # normal_reconstruction_loss = (self.weight_normal * F.mse_loss(normal_effect, total_effect, reduction='none') * mask_weight).mean(dim=(1, 2, 3)).mean()
+        # total_reconstruction_loss = (F.mse_loss(normal_effect + controllable_effect, total_effect, reduction='none') * mask_weight).mean(dim=(1, 2, 3)).mean()
+        # normal_reconstruction_loss = self.weight_normal * F.mse_loss(normal_effect, total_effect)
+        # total_reconstruction_loss = F.mse_loss(normal_effect + controllable_effect, total_effect)
         loss = total_reconstruction_loss + normal_reconstruction_loss
 
         self.next_observations = next_observations # for mask visualizations
         self.controllable_effect = controllable_effect # for mask visualizations
         self.normal_effect = normal_effect # for mask visualizations
+        self.total_effect = total_effect # for mask visualizations
         self.actions = actions
         self.infos = exp_batch['info']
         # self.wandb_imgs = sample_imgs_clusters(next_observations.detach().cpu().numpy(), controllable_effect.detach().cpu().numpy(), size=5)
@@ -364,6 +383,7 @@ class CTRL_module():
         next_observations = self.next_observations.detach().cpu().numpy()
         controllable_effect = self.controllable_effect.detach().cpu().numpy()
         normal_effect = self.normal_effect.detach().cpu().numpy()
+        total_effect = self.total_effect.detach().cpu().numpy()
         actions = self.actions.detach().cpu().numpy()
 
         infos = []
@@ -383,9 +403,10 @@ class CTRL_module():
         main_frames = next_observations[indices]
         masks = controllable_effect[indices]
         norm_masks = normal_effect[indices]
+        total_effect_samples = total_effect[indices]
         actions = actions[indices]
         events = events[indices]
-        full_imgs = [combine_frames(main_frame, mask, action, event, norm_mask) for main_frame, mask, norm_mask, action, event in zip(main_frames, masks, norm_masks, actions, events)]
+        full_imgs = [combine_frames(main_frame, mask, action, event, norm_mask, effect) for main_frame, mask, norm_mask, effect, action, event in zip(main_frames, masks, norm_masks, total_effect_samples, actions, events)]
         wandb_imgs = [wandb.Image(img) for img in full_imgs]
         return wandb_imgs
 
@@ -592,25 +613,37 @@ action_name = {
     4: 'down'
 }
 
-def combine_frames(main_frame, mask, action, event, norm_mask=None):
-    gray_mask = color.rgb2gray(mask.transpose(2,1,0))
-    gray_norm_mask = color.rgb2gray(norm_mask.transpose(2,1,0))
-    # bin_mask = gray_mask.round()
-    if norm_mask is not None:
+def combine_frames(main_frame, mask, action, event, norm_mask=None, effect=None):
+    if norm_mask is not None and effect is not None:
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(1,4)
+    elif norm_mask is not None or effect is not None:
         fig, (ax1, ax2, ax3) = plt.subplots(1,3)
     else:
         fig, (ax1, ax2) = plt.subplots(1,2)
+
     ax1.imshow(main_frame.transpose(2,1,0))
     ax1.axis('off')
-    # pdb.set_trace()
-    ax1.set_title(f'action: {action_name[action]}\nmax_norm: {np.max(np.abs(gray_mask)):.3f}')
-    ax2.imshow(gray_mask, cmap='gray', vmin=-1, vmax=1)
+    ax1.set_title(f'{action_name[action]}')
+
+    ax2.imshow((mask.transpose(2,1,0) + 1) / 2)
     ax2.axis('off')
-    ax2.set_title('events: {}'.format("\n".join(event)))
-    if norm_mask is not None:
-        ax3.imshow(gray_norm_mask, cmap='gray', vmin=-1, vmax=1)
+    ax2.xaxis.set_label_position('bottom')
+    ax2.set_title('{}'.format("\n".join(event)))
+
+    if norm_mask is not None and effect is not None:
+        ax3.imshow((norm_mask.transpose(2,1,0) + 1) / 2)
         ax3.axis('off')
-        ax3.set_title(f'max_norm: {np.max(np.abs(gray_norm_mask)):.3f}')
+
+        ax4.imshow((effect.transpose(2,1,0) + 1) / 2)
+        ax4.axis('off')
+        ax4.set_title('error: {:.4f}'.format(np.mean(np.abs(effect - (mask + norm_mask)))))
+    elif norm_mask is not None:
+        ax3.imshow((norm_mask.transpose(2,1,0) + 1) / 2)
+        ax3.axis('off')
+    elif effect is not None:
+        ax3.imshow((effect.transpose(2,1,0) + 1) / 2)
+        ax3.axis('off')
+
     fig.canvas.draw()
     full_img = PIL.Image.frombytes('RGB', fig.canvas.get_width_height(),fig.canvas.tostring_rgb())
     plt.close(fig)

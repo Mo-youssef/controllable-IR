@@ -12,19 +12,20 @@ class CNNEncoder(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Conv2d(input_channels, channels, kernel_size=4, stride=2, padding=1),
-            # nn.BatchNorm2d(channels),
+            nn.BatchNorm2d(channels),
             nn.ReLU(),
             nn.Conv2d(channels, channels, kernel_size=4, stride=2, padding=1),
             ResBlock(channels),
             ResBlock(channels),
         )
 
-        output_size = 21 * 21 * channels
+        # output_size = 21 * 21 * channels
+        output_size = 16 * 16 * channels
         self.hidden_size = latent_size
         self.mlp = nn.Sequential(
             Flatten(),
             nn.Linear(output_size, latent_size),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, observation: torch.Tensor) -> torch.Tensor:
@@ -39,10 +40,10 @@ class ResBlock(nn.Module):
         self.block = nn.Sequential(
             nn.ReLU(),
             nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1),
-            # nn.BatchNorm2d(channels),
+            nn.BatchNorm2d(channels),
             nn.ReLU(),
             nn.Conv2d(channels, channels, kernel_size=1),
-            # nn.BatchNorm2d(channels)
+            nn.BatchNorm2d(channels)
         )
 
     def forward(self, x):

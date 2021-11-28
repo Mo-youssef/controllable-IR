@@ -179,17 +179,27 @@ class DelayCash(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self.cash_after = cash_after
         self.reward_sum = 0
-        
+
+    def reset(self):
+        obs = self.env.reset()
+        self.reward_sum = 0
+        return obs
+
     def step(self, ac):
         obs, reward, done, info = self.env.step(ac)
-        if reward > 0:
+        if done:
+            reward += self.reward_sum
+            self.reward_sum = 0
+        elif reward > 0:
             if self.reward_sum >= self.cash_after:
                 reward = self.reward_sum
                 self.reward_sum = 0
             else:
                 self.reward_sum += reward
                 reward = 0
+
         return obs, reward, done, info
+
 
 class NoExtReward(gym.Wrapper):
     def __init__(self, env):
@@ -231,11 +241,12 @@ def griddly_wrapper(env_id, max_frames=0, clip_rewards=True, frame_stack=True, o
     env.enable_history(True)
     env.reset()
     env = ChannelOrder(env, channel_order='hwc')
-    env = ResizeFrame(env, (84,84))
+    # env = ResizeFrame(env, (84,84))
+    env = ResizeFrame(env, (64,64))
     env = ChannelOrder(env, channel_order='chw')
     if punishment != 1:
         env = RewardScaling(env, scale=punishment, event="box-move-near_wall")
-    if cash_after != 1:
+    if cash_after != -1:
         env = DelayCash(env, cash_after=cash_after)
     if max_frames:
         env = pfrl.wrappers.ContinuingTimeLimit(
@@ -319,6 +330,7 @@ class VideoRecorder():
         self.first_frame = True
         self.frames = list()
         self.history_intrinsic_reward = list()
+        self.history_extrinsic_reward = list()
         self.history_catch_bf = list()
 
     def record_if_ready(self, step):
@@ -326,33 +338,32 @@ class VideoRecorder():
             self.record_video = True
             self.last_video = step
 
-    def add_frames(self, observation, intrinsic_reward=None, info=None):
-        if self.record_video is False:
+    def add_frames(self, observation, info, intrinsic_reward=None, extrinsic_reward=None):
+        if self.record_video == False:
             return
-
         if self.first_frame:
-            info_frame = self._to_info_frame(None, None, None)
+            info_frame = self._to_info_frame(None, None, None, None)
             self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
             self.first_frame = False
         else:
             self.history_intrinsic_reward.append(intrinsic_reward)
-            catch_bf = int('History' in info and len([event for event in info['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0)
+            self.history_extrinsic_reward.append(-1 * extrinsic_reward)
+            catch_bf = -0.1 * int(('History' in info) and (len([event for event in info['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0))
             self.history_catch_bf.append(catch_bf)
-
-            info_frame = self._to_info_frame(intrinsic_rewards=self.history_intrinsic_reward, catch_bf=self.history_catch_bf)
+            info_frame = self._to_info_frame(extrinsic_rewards=self.history_extrinsic_reward, intrinsic_rewards=self.history_intrinsic_reward, catch_bf=self.history_catch_bf)
             self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
 
     def stop_and_reset(self, step):
         if self.record_video == False:
             self.record_if_ready(step)
             return dict()
-
-        videos = wandb.Video(np.stack(self.frames).astype(np.uint8), fps=4, format="mp4")
+        videos = wandb.Video(np.stack(self.frames).astype(np.uint8), fps=12, format="mp4")
         # reseting the flags
         self.record_video = False
         self.first_frame = True
         self.frames = list()
         self.history_intrinsic_reward = list()
+        self.history_extrinsic_reward = list()
         self.history_catch_bf = list()
         print('recording video done')
         return dict(video=videos)
@@ -366,10 +377,10 @@ class VideoRecorder():
             ax.plot(range(len(extrinsic_rewards)), extrinsic_rewards, color='green', label='extrinsic')
         if intrinsic_rewards is not None:
             ax.plot(range(len(intrinsic_rewards)), intrinsic_rewards, color='red', label='intrinsic')
-        if values is not None:
-            ax.plot(range(len(values)), values, color='blue', label='value')
         if catch_bf is not None:
             ax.plot(range(len(catch_bf)), catch_bf, color='yellow', label='catch_bf')
+        if values is not None:
+            ax.plot(range(len(values)), values, color='blue', label='value')
 
         ax.patch.set_alpha(0)
         ax.legend()
@@ -383,5 +394,5 @@ class VideoRecorder():
         return np.asarray(info_image).transpose(2, 0, 1)
 
     def _merge_info_and_obs(self, info_frame, obs_frame):
-        obs_frame_scaled = resize(obs_frame.transpose(1, 2, 0), info_frame.shape[1:], preserve_range=True).transpose(2, 0, 1)
+        obs_frame_scaled = resize(obs_frame.transpose(2, 1, 0), info_frame.shape[1:], preserve_range=True).transpose(2, 0, 1)
         return np.concatenate([obs_frame_scaled.astype(np.uint8), info_frame], axis=2)

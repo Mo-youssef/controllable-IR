@@ -27,7 +27,8 @@ def PPO_model(obs_n_channels, n_actions, recurrent=False):
             # lecun_init(nn.Linear(3136, 512)),
             # nn.ReLU(),
             # lecun_init(nn.LSTM(num_layers=1, input_size=512, hidden_size=512)),
-            lecun_init(nn.LSTM(num_layers=1, input_size=3136, hidden_size=512)),
+            # lecun_init(nn.LSTM(num_layers=1, input_size=3136, hidden_size=512)),
+            lecun_init(nn.LSTM(num_layers=1, input_size=1024, hidden_size=512)),
             pfrl.nn.Branched(
                 nn.Sequential(
                     lecun_init(nn.Linear(512, n_actions), 1e-2),
@@ -45,7 +46,8 @@ def PPO_model(obs_n_channels, n_actions, recurrent=False):
             lecun_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
             nn.Flatten(),
-            lecun_init(nn.Linear(3136, 512)),
+            # lecun_init(nn.Linear(3136, 512)),
+            lecun_init(nn.Linear(1024, 512)),
             nn.ReLU(),
             pfrl.nn.Branched(
                 nn.Sequential(

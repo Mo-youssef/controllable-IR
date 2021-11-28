@@ -19,8 +19,8 @@ Environment:
   Player:
     AvatarObject: catcher
   Termination:
-    Win:
-      - eq: [butterfly:count, 0] # If there are no butterflies
+    # Win:
+    #   - eq: [butterfly:count, 0] # If there are no butterflies
     Lose:
       - eq: [catcher:count, 0] # If the catcher gets killed
   Levels:
@@ -49,15 +49,35 @@ Environment:
     #   w . .  . . . . . . 0 . 0 . 0 . 0 w
     #   w w w  w w w w w w w w w w w w w w
     - |
-      w w w w w w w w w w w w
-      w . . . . . . . . 1 . w
-      w . 1 . . . . . . . . w
-      w . . . . . . . . . . w
-      w . . . . . . . . . . w
-      w . . 1 . . . . . A . w
-      w . . . . . . . . . . w
-      w . . . . 1 . . . . . w
-      w w w w w w w w w w w w
+      w w w w w w w w w w w w w w w w w
+      w . . . . . . . . 1 . . . . . . w
+      w . 1 . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . 1 . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . 1 . . . . . . . . . . A w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w w w w w w w w w w w w w w w w w
+    - |
+      w w w w w w w w w w w w w w w w w
+      w . . . . . . w . 1 . . . . . . w
+      w . 1 . . . . w . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . 1 . . . . w w w w w w w w w
+      w . . . . . . . . . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w w w w w w w w w . . . . . . . w
+      w . . . . . . . . . . . . . . . w
+      w . . . 1 . w . . . . . . . . A w
+      w . . . . . w . . . . . . . . . w
+      w . . . . . w . . . . . . . . . w
+      w w w w w w w w w w w w w w w w w
     - |
       w w w w w w w w w w w w w w w w w w w w w w w w w w w w
       w . . 1 . . . . . 1 . . . . . . 1 . . . . 1 . . . . . w

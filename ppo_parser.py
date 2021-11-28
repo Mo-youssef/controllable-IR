@@ -30,6 +30,7 @@ def create_parser():
     parser.add_argument('--evaluate', action='store_true', help='Calculate performance measure on evaluation env')
     parser.add_argument('--log_interval', type=int_type, default=int_type(10000), help='pfrl log frequency')
     parser.add_argument('--seed', type=int_type, default=int_type(42), help='random seed initializer')
+    parser.add_argument('--cash_after', type=int_type, default=int_type(-1), help='random seed initializer')
     parser.add_argument('--wandb', action='store_true', help='use wandb for visualization')
     parser.add_argument('--wandb_project', default='clusters_ICLR', help='Name of wandb project')
     # NGU params
@@ -41,12 +42,16 @@ def create_parser():
     parser.add_argument('--ngu_k_neighbors', type=int_type, default=int_type(10), help='ngu module K parameter')
     parser.add_argument('--ngu_L', type=int_type, default=int_type(5), help='ngu module L parameter')
     parser.add_argument('--ngu_mem', type=int_type, default=int_type(1e6), help='ngu memory size')
+    parser.add_argument('--ir_eps', type=float, default=0.01, help='ngu memory size')
+    parser.add_argument('--ir_c', type=float, default=0.001, help='ngu memory size')
+    parser.add_argument('--ir_max_sim', type=float, default=8, help='ngu memory size')
     # CTRL params
     parser.add_argument('--ctrl_hidden_size', type=int_type, default=int_type(32), help='ctrl module hidden size')
     parser.add_argument('--ctrl_channels', type=int_type, default=int_type(64), help='ctrl module channels')
     parser.add_argument('--ctrl_latent_size', type=int_type, default=int_type(32), help='ctrl module latent size')
     parser.add_argument('--ctrl_encoder_out', type=int_type, default=int_type(128), help='ctrl module latent size')
     parser.add_argument('--ctrl_weight_normal', type=float, default=0.01, help='ctrl module reconstruction loss weight')
+    parser.add_argument('--ctrl_weight_effect', type=float, default=0, help='ctrl module reconstruction loss weight')
     parser.add_argument('--ir_model_copy', type=int_type, default=int_type(10000), help='IR module embedding function copy')
     # IR selection: either ngu or ctrl
     group = parser.add_mutually_exclusive_group()
