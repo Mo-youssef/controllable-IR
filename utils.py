@@ -41,6 +41,7 @@ register_env(env_id='Clusters-Semi-Sparse-Wall', file_path='gdy_envs/semi_sparse
 register_env(env_id='Clusters-Semi-Sparse-Wall-No', file_path='gdy_envs/semi_sparse_clusters_wall_no.yml')
 register_env(env_id='Butterflies-Spiders', file_path='gdy_envs/butterflies_spiders.yml')
 register_env(env_id='Butterflies-Spiders-Easy', file_path='gdy_envs/butterflies_spiders_easy.yml')
+register_env(env_id='ButterfliesButterflies', file_path='gdy_envs/butterflies_easy.yml')
 
 class RandomSelectionEpsilonGreedy(explorer.Explorer):
 
