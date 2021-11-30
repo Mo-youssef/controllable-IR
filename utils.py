@@ -1,3 +1,5 @@
+import itertools
+
 from gym.envs.registration import register
 import numpy as np
 import pfrl
@@ -41,7 +43,22 @@ register_env(env_id='Clusters-Semi-Sparse-Wall', file_path='gdy_envs/semi_sparse
 register_env(env_id='Clusters-Semi-Sparse-Wall-No', file_path='gdy_envs/semi_sparse_clusters_wall_no.yml')
 register_env(env_id='Butterflies-Spiders', file_path='gdy_envs/butterflies_spiders.yml')
 register_env(env_id='Butterflies-Spiders-Easy', file_path='gdy_envs/butterflies_spiders_easy.yml')
-register_env(env_id='ButterfliesButterflies', file_path='gdy_envs/butterflies_easy.yml')
+register_env(env_id='Butterflies', file_path='gdy_envs/butterflies_easy.yml')
+register_env(env_id='Zelda-Mod', file_path='gdy_envs/zelda_mod.yml')
+
+
+class UndoMultiDiscreteWrapper(gym.ActionWrapper):
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.mapping = {i: np.asarray(action) for i, action in enumerate(itertools.product(*[np.arange(n) for n in env.action_space.nvec]))}
+        self.action_space = gym.spaces.Discrete(len(self.mapping))
+
+    def action(self, action):
+        return self.mapping[action]
+
+    def reverse_action(self, action):
+        return None
 
 class RandomSelectionEpsilonGreedy(explorer.Explorer):
 
@@ -259,6 +276,10 @@ def griddly_wrapper(env_id, max_frames=0, clip_rewards=True, frame_stack=True, o
     # env = atari_wrappers.wrap_deepmind(env, episode_life=False, clip_rewards=clip_rewards, frame_stack=frame_stack)
     if test:
         env = ReturnState(env)
+
+    if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+        env = UndoMultiDiscreteWrapper(env)
+
     return env
 
 def wrap_env(env_id, max_frames=5000, clip_rewards=True, episode_life=True, frame_stack=True, obs_shape=(84,84), test=False, punishment=1, cash_after=-1, no_ext=False):
@@ -332,7 +353,7 @@ class VideoRecorder():
         self.frames = list()
         self.history_intrinsic_reward = list()
         self.history_extrinsic_reward = list()
-        self.history_catch_bf = list()
+        self.history_event = list()
 
     def record_if_ready(self, step):
         if step - self.last_video >= self.video_frequency:
@@ -349,13 +370,13 @@ class VideoRecorder():
         else:
             self.history_intrinsic_reward.append(intrinsic_reward)
             self.history_extrinsic_reward.append(-1 * extrinsic_reward)
-            catch_bf = -0.1 * int(('History' in info) and (len([event for event in info['History'] if event['SourceObjectName'] == 'catcher' and event['DestinationObjectName'] == 'butterfly']) > 0))
-            self.history_catch_bf.append(catch_bf)
-            info_frame = self._to_info_frame(extrinsic_rewards=self.history_extrinsic_reward, intrinsic_rewards=self.history_intrinsic_reward, catch_bf=self.history_catch_bf)
+            event = -0.1 * int(('History' in info) and (len([event for event in info['History'] if event['SourceObjectName'] in ('catcher', 'avatar') and event['DestinationObjectName'] in ('butterfly', 'key', 'goal')]) > 0))
+            self.history_event.append(event)
+            info_frame = self._to_info_frame(extrinsic_rewards=self.history_extrinsic_reward, intrinsic_rewards=self.history_intrinsic_reward, events=self.history_event)
             self.frames.append(self._merge_info_and_obs(info_frame, observation.copy()))
 
     def stop_and_reset(self, step):
-        if self.record_video == False:
+        if self.record_video == False or not self.frames:
             self.record_if_ready(step)
             return dict()
         videos = wandb.Video(np.stack(self.frames).astype(np.uint8), fps=12, format="mp4")
@@ -365,11 +386,11 @@ class VideoRecorder():
         self.frames = list()
         self.history_intrinsic_reward = list()
         self.history_extrinsic_reward = list()
-        self.history_catch_bf = list()
+        self.history_event = list()
         print('recording video done')
         return dict(video=videos)
 
-    def _to_info_frame(self, extrinsic_rewards=None, intrinsic_rewards=None, values=None, catch_bf=None):
+    def _to_info_frame(self, extrinsic_rewards=None, intrinsic_rewards=None, values=None, events=None):
         fig = Figure(figsize=(3, 3), dpi=60)
         canvas = FigureCanvas(fig)
         ax = fig.gca()
@@ -378,8 +399,8 @@ class VideoRecorder():
             ax.plot(range(len(extrinsic_rewards)), extrinsic_rewards, color='green', label='extrinsic')
         if intrinsic_rewards is not None:
             ax.plot(range(len(intrinsic_rewards)), intrinsic_rewards, color='red', label='intrinsic')
-        if catch_bf is not None:
-            ax.plot(range(len(catch_bf)), catch_bf, color='yellow', label='catch_bf')
+        if events is not None:
+            ax.plot(range(len(events)), events, color='yellow', label='event')
         if values is not None:
             ax.plot(range(len(values)), values, color='blue', label='value')
 

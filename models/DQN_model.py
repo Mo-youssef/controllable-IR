@@ -66,7 +66,8 @@ class Embedding_fn(nn.Module):
     self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=8, padding=0, stride=4)
     self.conv2 = nn.Conv2d(32, 64, kernel_size=4, padding=0, stride=2)
     self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=0, stride=1)
-    self.output_layer = nn.Linear(64*7*7, embedding_size)
+    # self.output_layer = nn.Linear(64*7*7, embedding_size)
+    self.output_layer = nn.Linear(1024, embedding_size)
     self.embedding_size = embedding_size
 
   def forward(self, x):

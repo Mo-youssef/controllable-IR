@@ -7,21 +7,20 @@ from .cnn_decoder import CNNDecoder
 
 class DisentangleNetwork(nn.Module):
 
-    def __init__(self, input_channels: int, num_actions: int, hidden_size: int, channels: int, latent_size: int, encoder_out: int):
+    def __init__(self, input_channels: int, num_actions: int, hidden_size: int, channels: int, latent_size: int, encoder_out: int, action_embedding_size):
         super().__init__()
         self.num_actions = num_actions
 
-        embedding_size = 8  # 32
         self.encoder = CNNEncoder(input_channels, channels, encoder_out)
         self.decoder = CNNDecoder(input_channels, channels, latent_size)
 
-        self.action_embedding = nn.Embedding(num_actions, embedding_size)
+        self.action_embedding = nn.Embedding(num_actions, action_embedding_size)
 
         self.controllable_module = nn.Sequential(
-            nn.Linear(encoder_out + embedding_size, hidden_size),
+            nn.Linear(encoder_out + action_embedding_size, hidden_size),
             nn.ReLU(),
-            # nn.Linear(hidden_size, hidden_size),
-            # nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
             nn.Linear(hidden_size, latent_size),
             nn.ReLU(),
         )
@@ -29,8 +28,8 @@ class DisentangleNetwork(nn.Module):
         self.normal_module = nn.Sequential(
             nn.Linear(encoder_out, hidden_size),
             nn.ReLU(),
-            # nn.Linear(hidden_size, hidden_size),
-            # nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
             nn.Linear(hidden_size, latent_size),
             nn.ReLU(),
         )

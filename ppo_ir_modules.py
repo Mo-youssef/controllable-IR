@@ -41,9 +41,9 @@ class MainMemory:
     def add(self, data):
         for item in data:
             self.data.append(item) 
-            
+
 class EpisodicMemory():
-    def __init__(self, max_size, embedding_size, k_neighbors, eps=0.01, C=0.001, psi=0.008, max_sim=8):
+    def __init__(self, max_size, embedding_size, k_neighbors, eps=0.01, C=0.001, psi=0.008, max_sim=8, buy_in=30):
         self.num = 0
         self.max_size = max_size
         self.memory = np.zeros((max_size, embedding_size))
@@ -54,6 +54,7 @@ class EpisodicMemory():
         self.C = C
         self.psi = psi
         self.max_sim = max_sim
+        self.buy_in = buy_in
         self.embedding_size = embedding_size
 
     def reset(self):
@@ -65,11 +66,8 @@ class EpisodicMemory():
         self.memory[self.num % self.max_size] = np.array(embedding).ravel()
         self.num = (self.num + 1) % self.max_size
 
-    def score(self, embedding, return_distance=False):
-        if self.num < self.k_neighbors:
-            if return_distance:
-                return 0, -1
-
+    def score(self, embedding):
+        if self.num < self.buy_in:
             return 0
 
         test = np.array(embedding).ravel()[None, :]
@@ -84,9 +82,6 @@ class EpisodicMemory():
         dist_kernel = self.eps / (self.eps + dist_normalized)
         sim = np.sqrt(np.sum(dist_kernel)) + self.C
         score = 0 if sim >= self.max_sim else 1 / sim
-        if return_distance:
-            return score, dist_normalized
-
         return score
 
 class Eval_intrinsic_module():
@@ -168,7 +163,7 @@ class NGU_module():
     name = 'NGU'
     def __init__(self, embedding_fn, embedding_model, optimizer,
                  lr, agent, n_actions, episodic_max_size, embedding_size,
-                 k_neighbors, update_schedule, num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_max_sim):
+                 k_neighbors, update_schedule, num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_psi, ir_max_sim, ir_buy_in):
         # this class takes the agent as argument to get parameters not for any calculations
         self.agent = agent
         self.embedding_fn = embedding_fn().to(self.agent.device)
@@ -178,7 +173,7 @@ class NGU_module():
             self.embedding_fn, n_actions).to(self.agent.device)
         self.optimizer = optimizer(
             self.embedding_model.parameters(), lr=lr)
-        self.episodic_memory = [EpisodicMemory(episodic_max_size, embedding_size, k_neighbors, ir_eps, ir_c, max_sim=ir_max_sim) for _ in range(num_envs)]
+        self.episodic_memory = [EpisodicMemory(episodic_max_size, embedding_size, k_neighbors, ir_eps, ir_c, ir_psi, ir_max_sim, ir_buy_in) for _ in range(num_envs)]
         self.memory = MainMemory(mem_size, batch_size, agent.device)
         self.loss_fn = nn.CrossEntropyLoss()
         self.num_envs = num_envs
@@ -271,14 +266,15 @@ class CTRL_module():
     name = 'CTRL'
 
     def __init__(self, model_args, optimizer, lr, agent, weight_normal, weight_effect, episodic_max_size, k_neighbors, update_schedule,
-                 num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_max_sim):
+                 num_envs, mem_size, batch_size, ir_model_copy, ir_eps, ir_c, ir_psi, ir_max_sim, ir_buy_in):
         self.agent = agent
         self.weight_normal = weight_normal
         self.weight_effect = weight_effect
         self.disentangle_network = DisentangleNetwork(**model_args).to(self.agent.device)
         self.test_embedding_fn = copy.deepcopy(self.disentangle_network).to(self.agent.device)
         self.optimizer = optimizer(self.disentangle_network.parameters(), lr=lr)
-        self.episodic_memory = [EpisodicMemory(episodic_max_size, model_args['latent_size'], k_neighbors, ir_eps, ir_c, max_sim=ir_max_sim) for _ in range(num_envs)]
+        self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[40000, 200000], gamma=0.1)  # 1e-3 -> 1e-4 -> 1e-5
+        self.episodic_memory = [EpisodicMemory(episodic_max_size, model_args['latent_size'], k_neighbors, ir_eps, ir_c, ir_psi, ir_max_sim, ir_buy_in) for _ in range(num_envs)]
         self.memory = MainMemory(mem_size, batch_size, agent.device)
         self.num_envs = num_envs
         self.train_steps = 0
@@ -371,13 +367,14 @@ class CTRL_module():
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        self.lr_scheduler.step()
 
         self.accum_loss += loss.item()
         self.accum_recon += total_reconstruction_loss.item()
         self.accum_norm += normal_reconstruction_loss.item()
         self.accum_counter += 1
 
-        return dict(loss=float(loss.item()), total_loss=float(self.accum_recon), normal_loss=float(self.accum_norm))
+        return dict(loss=float(loss.item()), total_loss=float(self.accum_recon), normal_loss=float(self.accum_norm), cen_lr_schedule=self.lr_scheduler.get_last_lr()[0])
     
     def sample_imgs_butterflies(self, size=5):
         next_observations = self.next_observations.detach().cpu().numpy()
@@ -392,8 +389,11 @@ class CTRL_module():
             a_move_box = False
             event_list = []
             for item in info['History']:
-                a_move_box = (a_move_box or (('catcher' in item['SourceObjectName']) and ('move' in item['ActionName']) and ('butterfly' in item['DestinationObjectName'])))
-                event_list.append(f"{item['SourceObjectName']}-{item['ActionName']}-{item['DestinationObjectName']}")
+                # a_move_box = (a_move_box or (('catcher' in item['SourceObjectName']) and ('move' in item['ActionName']) and ('butterfly' in item['DestinationObjectName'])))
+                a_move_box = (a_move_box or (item['SourceObjectName'] in ('catcher', 'avatar') and item['ActionName'] in ('move', 'attack') and item['DestinationObjectName'] in ('butterfly', 'key', 'spider', 'goal', 'near_key')))
+                event_name = f"{item['SourceObjectName']}-{item['ActionName']}-{item['DestinationObjectName']}"
+                if event_name not in ('key-pick_key-key', 'key-pick_key-_empty'):
+                    event_list.append(event_name)
             infos.append(a_move_box)
             events.append(event_list)
         events = np.array(events, dtype=object)
@@ -623,7 +623,7 @@ def combine_frames(main_frame, mask, action, event, norm_mask=None, effect=None)
 
     ax1.imshow(main_frame.transpose(2,1,0))
     ax1.axis('off')
-    ax1.set_title(f'{action_name[action]}')
+    ax1.set_title(f'{action}')
 
     ax2.imshow((mask.transpose(2,1,0) + 1) / 2)
     ax2.axis('off')

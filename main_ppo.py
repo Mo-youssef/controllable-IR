@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import wandb
 import logging
-from collections import deque
+from collections import deque, defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -154,7 +154,8 @@ if ppo_params.ngu_reward:
     episodic_ir_module = NGU_module(encoder, Embedding_full, torch.optim.Adam, ppo_params.ngu_lr, agent,
                                     n_actions, ppo_params.max_frames, ppo_params.ngu_embed_size,
                                     ppo_params.ngu_k_neighbors, ppo_params.ngu_update_schedule, num_envs,
-                                    ppo_params.ngu_mem, ppo_params.ir_batch_size, ppo_params.ir_model_copy, ppo_params.ir_eps, ppo_params.ir_c, ppo_params.ir_max_sim)
+                                    ppo_params.ngu_mem, ppo_params.ir_batch_size, ppo_params.ir_model_copy, ppo_params.ir_eps,
+                                    ppo_params.ir_c, ppo_params.ir_psi, ppo_params.ir_max_sim, ppo_params.ir_buy_in)
     episodic_ir_module.reset(np.ones(num_envs))
 elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
     model_args = {
@@ -164,12 +165,14 @@ elif ppo_params.ctrl_reward or ppo_params.all_ctrl_reward:
         'channels': ppo_params.ctrl_channels,
         'latent_size': ppo_params.ctrl_latent_size,
         'encoder_out': ppo_params.ctrl_encoder_out,
+        'action_embedding_size': ppo_params.ctrl_action_size,
     }
     if ppo_params.ctrl_reward:
-        episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
-                                ppo_params.ctrl_weight_normal, ppo_params.ctrl_weight_effect, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
-                                ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem,
-                                ppo_params.ir_batch_size, ppo_params.ir_model_copy, ppo_params.ir_eps, ppo_params.ir_c, ppo_params.ir_max_sim)
+        episodic_ir_module = CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, ppo_params.ctrl_weight_normal,
+                                         ppo_params.ctrl_weight_effect, ppo_params.max_frames, ppo_params.ngu_k_neighbors,
+                                         ppo_params.ngu_update_schedule, num_envs, ppo_params.ngu_mem, ppo_params.ir_batch_size,
+                                         ppo_params.ir_model_copy, ppo_params.ir_eps, ppo_params.ir_c, ppo_params.ir_psi,
+                                         ppo_params.ir_max_sim, ppo_params.ir_buy_in)
     else:
         episodic_ir_module = ALL_CTRL_module(model_args, torch.optim.Adam, ppo_params.ngu_lr, agent, 
                                 ppo_params.ctrl_weight_normal, ppo_params.max_frames, ppo_params.ngu_k_neighbors, 
@@ -286,8 +289,9 @@ try:
             butterfly_counts = vec_butterfly_count(env)
             recent_butterfly_counts.extend(butterfly_counts[end])
 
-        for _ in range(num_envs):
+        for e in range(num_envs):
             t += 1
+
             if ppo_params.checkpoint_frequency and t % ppo_params.checkpoint_frequency == 0:
                 save_agent(agent, t, ppo_params.outdir+'/'+unique_id, logger, suffix='_agent')
                 if intrinsic_reward:
@@ -340,13 +344,11 @@ try:
                                 **masks}
                             
                         episodic_ir_module.reset_stats()
-                wandb.log({'env_steps': t, 'agent_train_steps': agent.n_updates, 'last_R': recent_returns[-1] if recent_returns else np.nan,
-                        'episode':np.sum(episode_idx), 'average_R':np.mean(recent_returns) if recent_returns else np.nan, 
-                        'episode_len': np.mean(episode_len_queue), 'max_R': np.max(recent_returns) if recent_returns else np.nan,
-                        **temp_dict, **recorded_video,**ir_logs, **ngu_logs, **ctrl_logs})
+                wandb.log({'env_steps': t, 'agent_train_steps': agent.n_updates, 'last_R': recent_returns[-1] if recent_returns else np.nan, 'episode': np.sum(episode_idx),
+                           'average_R': np.mean(recent_returns) if recent_returns else np.nan, 'episode_len': np.mean(episode_len_queue),
+                           'max_R': np.max(recent_returns) if recent_returns else np.nan, **temp_dict, **recorded_video, **ir_logs, **ngu_logs, **ctrl_logs})
                 recorded_video = dict()
 
-                        
         if evaluator and t >= ppo_params.warmup:
             eval_stats = evaluator.evaluate_if_necessary(step=t)
             if eval_stats is not None:
